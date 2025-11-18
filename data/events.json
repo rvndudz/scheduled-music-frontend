@@ -1,0 +1,17 @@
+[
+  {
+    "event_id": "event_seed",
+    "event_name": "Morning Set",
+    "artist_name": "Codex DJ",
+    "start_time_utc": "2025-11-18T06:00:00.000Z",
+    "end_time_utc": "2025-11-18T07:00:00.000Z",
+    "tracks": [
+      {
+        "track_id": "track_seed",
+        "track_name": "Sunrise Groove",
+        "track_url": "https://example-bucket.r2.dev/sunrise-groove.mp3",
+        "track_duration_seconds": 180
+      }
+    ]
+  }
+]
