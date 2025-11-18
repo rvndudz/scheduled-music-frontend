@@ -1,6 +1,6 @@
 ## Scheduled Music Console
 
-Full-stack Next.js application that lets admins upload MP3 tracks to Cloudflare R2, extract metadata automatically, and persist finished DJ events into `data/events.json`.
+Lightweight Next.js console for curating scheduled playlists that can power in-game radios, kiosks, or virtual venues—no dedicated streaming server required. Upload MP3s once, store their metadata alongside timing info, and let your game client pull the JSON schedule to simulate live programming (think GTA-style radio stations inside your own world).
 
 ### Features
 
@@ -28,7 +28,7 @@ Full-stack Next.js application that lets admins upload MP3 tracks to Cloudflare 
    npm run dev
    ```
 
-4. Visit [http://localhost:3000/upload-event](http://localhost:3000/upload-event) to use the uploader UI.
+4. Visit [http://localhost:3000/upload-event](http://localhost:3000/upload-event) to schedule a new playlist.
 
 ### Data & Storage
 
