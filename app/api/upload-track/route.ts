@@ -7,14 +7,6 @@ import { parseBuffer } from "music-metadata";
 import { uploadFileToR2 } from "@/lib/r2Client";
 
 export const runtime = "nodejs";
-export const config = {
-  api: {
-    bodyParser: {
-      // Allow larger MP3 uploads; Vercel otherwise returns 413 for bigger files.
-      sizeLimit: "64mb",
-    },
-  },
-};
 
 const toSlug = (value: string): string =>
   value

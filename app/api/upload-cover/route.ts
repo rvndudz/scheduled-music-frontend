@@ -6,14 +6,6 @@ import { NextResponse } from "next/server";
 import { uploadFileToR2 } from "@/lib/r2Client";
 
 export const runtime = "nodejs";
-export const config = {
-  api: {
-    bodyParser: {
-      // Allow larger image uploads to avoid 413 errors in production.
-      sizeLimit: "32mb",
-    },
-  },
-};
 
 const allowedMimeTypes = ["image/jpeg", "image/png", "image/webp"];
 

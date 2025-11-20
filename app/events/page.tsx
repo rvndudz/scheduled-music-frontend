@@ -9,6 +9,7 @@ import {
   type FormEvent,
 } from "react";
 import Image from "next/image";
+import { parseBuffer } from "music-metadata-browser";
 import type { EventRecord } from "@/types/events";
 import {
   convertSriLankaInputToUtc,
@@ -123,27 +124,97 @@ const cancelEditing = () => {
     }
     setStatus(null);
     for (const file of Array.from(fileList)) {
-      const formData = new FormData();
-      formData.append("file", file);
+      let duration: number | null = null;
+      let bitrate: number | null = null;
+      let title: string | null = null;
       try {
-        const response = await fetch("/api/upload-track", {
-          method: "POST",
-          body: formData,
+        const buffer = await file.arrayBuffer();
+        const meta = await parseBuffer(
+          new Uint8Array(buffer),
+          file.type || "audio/mpeg",
+        );
+        duration =
+          typeof meta.format.duration === "number"
+            ? Math.round(meta.format.duration)
+            : null;
+        bitrate =
+          typeof meta.format.bitrate === "number"
+            ? Math.round(meta.format.bitrate / 1000)
+            : null;
+        title = meta.common.title ?? null;
+      } catch {
+        setStatus({
+          type: "error",
+          text: `Could not read metadata for ${file.name}.`,
         });
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data?.error ?? "Unable to upload track.");
+        continue;
+      }
+
+      if (!duration) {
+        setStatus({
+          type: "error",
+          text: `Track duration missing for ${file.name}.`,
+        });
+        continue;
+      }
+
+      let presign;
+      try {
+        const res = await fetch("/api/upload-track-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileName: file.name,
+            contentType: file.type || "audio/mpeg",
+          }),
+        });
+        presign = await res.json();
+        if (!res.ok) {
+          throw new Error(presign?.error ?? "Unable to create upload URL.");
         }
-        setFormTracks((prev) => [...prev, data]);
       } catch (error) {
         setStatus({
           type: "error",
           text:
             error instanceof Error
               ? error.message
-              : "Failed to upload one of the tracks.",
+              : "Failed to prepare upload URL.",
         });
+        continue;
       }
+
+      try {
+        await fetch(presign.uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": file.type || "audio/mpeg" },
+          body: file,
+        });
+      } catch (error) {
+        setStatus({
+          type: "error",
+          text:
+            error instanceof Error
+              ? error.message
+              : "Upload to storage failed.",
+        });
+        continue;
+      }
+
+      setFormTracks((prev) => [
+        ...prev,
+        {
+          track_id: presign.track_id,
+          track_name: title?.trim() || file.name.replace(/\.[^.]+$/, ""),
+          track_url: presign.objectUrl,
+          track_duration_seconds: duration,
+          ...(bitrate ? { track_bitrate_kbps: bitrate } : {}),
+          track_size_bytes: file.size,
+        },
+      ]);
+      setStatus({
+        type: "success",
+        text: `Added ${title?.trim() || file.name}.`,
+      });
     }
     event.target.value = "";
   };

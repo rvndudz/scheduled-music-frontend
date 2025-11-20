@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
+import { parseBuffer } from "music-metadata-browser";
 
 import {
   convertSriLankaInputToUtc,
@@ -108,34 +109,85 @@ const resetForm = () => {
 
     setIsUploading(true);
 
-    const uploaded = [];
     for (const file of Array.from(fileList)) {
-      const formData = new FormData();
-      formData.append("file", file);
+      let duration = null;
+      let bitrate = null;
+      let title = null;
       try {
-        const res = await fetch("/api/upload-track", {
-          method: "POST",
-          body: formData,
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data?.error ?? "Unable to upload track.");
-        }
-        uploaded.push(data);
-        setTracks((prev) => [...prev, data]);
-      } catch (err) {
-        toast.error(
-          err instanceof Error
-            ? err.message
-            : "Track upload failed unexpectedly.",
+        const buffer = await file.arrayBuffer();
+        const meta = await parseBuffer(
+          new Uint8Array(buffer),
+          file.type || "audio/mpeg",
         );
+        duration =
+          typeof meta.format.duration === "number"
+            ? Math.round(meta.format.duration)
+            : null;
+        bitrate =
+          typeof meta.format.bitrate === "number"
+            ? Math.round(meta.format.bitrate / 1000)
+            : null;
+        title = meta.common.title ?? null;
+      } catch {
+        toast.error(`Could not read metadata for ${file.name}.`);
+        continue;
       }
-    }
 
-    if (uploaded.length) {
-      toast.success(
-        `Added ${uploaded.length} track${uploaded.length > 1 ? "s" : ""}.`,
-      );
+      if (!duration) {
+        toast.error(`Track duration missing for ${file.name}.`);
+        continue;
+      }
+
+      let presign;
+      try {
+        const res = await fetch("/api/upload-track-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileName: file.name,
+            contentType: file.type || "audio/mpeg",
+          }),
+        });
+        presign = await res.json();
+        if (!res.ok) {
+          throw new Error(presign?.error ?? "Unable to create upload URL.");
+        }
+      } catch (error) {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to prepare upload URL.",
+        );
+        continue;
+      }
+
+      try {
+        await fetch(presign.uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": file.type || "audio/mpeg" },
+          body: file,
+        });
+      } catch (error) {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Upload to storage failed.",
+        );
+        continue;
+      }
+
+      setTracks((prev) => [
+        ...prev,
+        {
+          track_id: presign.track_id,
+          track_name: title?.trim() || file.name.replace(/\.[^.]+$/, ""),
+          track_url: presign.objectUrl,
+          track_duration_seconds: duration,
+          ...(bitrate ? { track_bitrate_kbps: bitrate } : {}),
+          track_size_bytes: file.size,
+        },
+      ]);
+      toast.success(`Added ${title?.trim() || file.name}.`);
     }
 
     setIsUploading(false);

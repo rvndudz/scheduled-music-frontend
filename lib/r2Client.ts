@@ -5,6 +5,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 type RequiredEnv =
   | "R2_ACCESS_KEY"
@@ -175,4 +176,18 @@ export const writeTextObject = async (objectKey: string, body: string) => {
       ContentType: "application/json",
     }),
   );
+};
+
+export const createPresignedUploadUrl = async (
+  objectKey: string,
+  contentType?: string,
+) => {
+  const bucket = requireEnv("R2_BUCKET");
+  const client = getClient();
+  const command = new PutObjectCommand({
+    Bucket: bucket,
+    Key: objectKey,
+    ContentType: contentType ?? "application/octet-stream",
+  });
+  return getSignedUrl(client, command, { expiresIn: 15 * 60 });
 };
