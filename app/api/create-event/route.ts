@@ -6,10 +6,12 @@ import type { EventRecord } from "@/types/events";
 import {
   ensureIsoDate,
   ensureTracks,
+  findOverlappingEvent,
   persistEvents,
   readEventsFile,
   ValidationError,
 } from "@/lib/events";
+import { formatSriLankaDateTime } from "@/lib/timezone";
 
 export const runtime = "nodejs";
 
@@ -63,6 +65,16 @@ export async function POST(request: Request) {
     };
 
     const existingEvents = await readEventsFile();
+    const conflict = findOverlappingEvent(
+      existingEvents,
+      newEvent.start_time_utc,
+      newEvent.end_time_utc,
+    );
+    if (conflict) {
+      throw new ValidationError(
+        `Time window overlaps with "${conflict.event_name}" (${formatSriLankaDateTime(conflict.start_time_utc)} - ${formatSriLankaDateTime(conflict.end_time_utc)} SLT).`,
+      );
+    }
     existingEvents.push(newEvent);
 
     try {

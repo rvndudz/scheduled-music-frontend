@@ -3,6 +3,8 @@ export interface TrackRecord {
   track_name: string;
   track_url: string;
   track_duration_seconds: number;
+  track_bitrate_kbps?: number;
+  track_size_bytes?: number;
 }
 
 export interface EventRecord {

@@ -1,8 +1,12 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
-import { convertSriLankaInputToUtc } from "@/lib/timezone";
+import { useEffect, useMemo, useState } from "react";
+
+import {
+  convertSriLankaInputToUtc,
+  formatSriLankaDateTime,
+} from "@/lib/timezone";
 
 const initialFormState = {
   event_name: "",
@@ -14,24 +18,55 @@ const initialFormState = {
 const fieldClasses =
   "w-full rounded-2xl border border-red-700/60 bg-[#3d0c12]/80 px-4 py-3 text-slate-100 shadow-sm focus:border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-500/40 placeholder:text-slate-500";
 
-const createClientId = () =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const formatDuration = (totalSeconds) => {
+  const seconds = Math.max(0, Math.floor(totalSeconds || 0));
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  if (hrs > 0) {
+    return `${hrs}:${`${mins}`.padStart(2, "0")}:${`${secs}`.padStart(
+      2,
+      "0",
+    )}`;
+  }
+  return `${mins}:${`${secs}`.padStart(2, "0")}`;
+};
+
+const parseLocalDate = (value) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
 
 export default function UploadEventPage() {
   const [formValues, setFormValues] = useState(initialFormState);
-  const [queuedTracks, setQueuedTracks] = useState([]);
+  const [tracks, setTracks] = useState([]);
   const [coverImage, setCoverImage] = useState(null);
   const [coverPreview, setCoverPreview] = useState(null);
+  const [scheduledEvents, setScheduledEvents] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [status, setStatus] = useState(null);
 
   useEffect(() => {
-    return () => {
-      if (coverPreview) {
-        URL.revokeObjectURL(coverPreview);
+    let active = true;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/events", { cache: "no-store" });
+        const data = await res.json();
+        if (!res.ok) return;
+        if (active) {
+          setScheduledEvents(Array.isArray(data.events) ? data.events : []);
+        }
+      } catch {
+        // ignore fetch errors for the informational list
       }
+    };
+    load();
+    const id = setInterval(load, 15000);
+    return () => {
+      active = false;
+      clearInterval(id);
+      if (coverPreview) URL.revokeObjectURL(coverPreview);
     };
   }, [coverPreview]);
 
@@ -42,7 +77,7 @@ export default function UploadEventPage() {
 
   const resetForm = () => {
     setFormValues(initialFormState);
-    setQueuedTracks([]);
+    setTracks([]);
     if (coverPreview) {
       URL.revokeObjectURL(coverPreview);
     }
@@ -78,55 +113,59 @@ export default function UploadEventPage() {
     setCoverPreview(null);
   };
 
-  const queueTracks = (event) => {
+  const uploadTracksNow = async (event) => {
     const fileList = event.target.files;
-    if (!fileList || !fileList.length) {
-      return;
+    if (!fileList || !fileList.length) return;
+
+    setIsUploading(true);
+    setStatus(null);
+
+    const uploaded = [];
+    for (const file of Array.from(fileList)) {
+      const formData = new FormData();
+      formData.append("file", file);
+      try {
+        const res = await fetch("/api/upload-track", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error ?? "Unable to upload track.");
+        }
+        uploaded.push(data);
+        setTracks((prev) => [...prev, data]);
+      } catch (err) {
+        setStatus({
+          type: "error",
+          text:
+            err instanceof Error
+              ? err.message
+              : "Track upload failed unexpectedly.",
+        });
+      }
     }
 
-    const additions = Array.from(fileList).map((file) => ({
-      id: createClientId(),
-      file,
-    }));
+    if (uploaded.length) {
+      setStatus({
+        type: "success",
+        text: `Added ${uploaded.length} track${uploaded.length > 1 ? "s" : ""}.`,
+      });
+    }
 
-    setQueuedTracks((prev) => [...prev, ...additions]);
-    setStatus({
-      type: "success",
-      text: `Added ${additions.length} file${
-        additions.length > 1 ? "s" : ""
-      } to the queue.`,
-    });
+    setIsUploading(false);
     event.target.value = "";
   };
 
-  const removeQueuedTrack = (queuedId) => {
-    setQueuedTracks((prev) => prev.filter((item) => item.id !== queuedId));
-  };
-
-  const uploadQueuedTracks = async () => {
-    const uploaded = [];
-    for (const item of queuedTracks) {
-      const formData = new FormData();
-      formData.append("file", item.file);
-
-      const response = await fetch("/api/upload-track", {
-        method: "POST",
-        body: formData,
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload?.error ?? "Unable to upload track.");
-      }
-      uploaded.push(payload);
-    }
-    return uploaded;
+  const removeTrack = (trackId) => {
+    setTracks((prev) => prev.filter((track) => track.track_id !== trackId));
   };
 
   const submitEvent = async (event) => {
     event.preventDefault();
     setStatus(null);
 
-    if (!queuedTracks.length) {
+    if (!tracks.length) {
       setStatus({
         type: "error",
         text: "Please add at least one MP3 before publishing.",
@@ -171,25 +210,6 @@ export default function UploadEventPage() {
     }
 
     setIsSubmitting(true);
-    setStatus({
-      type: "info",
-      text: "Uploading mixes to MixMaster VR...",
-    });
-
-    let uploadedTracks = [];
-    try {
-      uploadedTracks = await uploadQueuedTracks();
-    } catch (error) {
-      setIsSubmitting(false);
-      setStatus({
-        type: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Failed to upload one of the mixes.",
-      });
-      return;
-    }
 
     let coverImageUrl;
     if (coverImage) {
@@ -227,7 +247,7 @@ export default function UploadEventPage() {
           artist_name: formValues.artist_name.trim(),
           start_time_utc: normalizedTimes.start,
           end_time_utc: normalizedTimes.end,
-          tracks: uploadedTracks,
+          tracks,
           ...(coverImageUrl ? { cover_image_url: coverImageUrl } : {}),
         }),
       });
@@ -240,10 +260,10 @@ export default function UploadEventPage() {
 
       setStatus({
         type: "success",
-        text: `“${data.event.event_name}” is now scheduled inside MixMaster VR.`,
+        text: `"${data.event.event_name}" is now scheduled inside MixMaster VR.`,
       });
       setFormValues(initialFormState);
-      setQueuedTracks([]);
+      setTracks([]);
       removeCover();
     } catch (error) {
       setStatus({
@@ -254,6 +274,29 @@ export default function UploadEventPage() {
       setIsSubmitting(false);
     }
   };
+
+  const eventStart = parseLocalDate(formValues.start_time_utc);
+  const eventEnd = parseLocalDate(formValues.end_time_utc);
+  const eventDurationSec =
+    eventStart && eventEnd && eventEnd > eventStart
+      ? Math.floor((eventEnd.getTime() - eventStart.getTime()) / 1000)
+      : null;
+  const totalTrackSeconds = tracks.reduce(
+    (sum, track) => sum + (track.track_duration_seconds || 0),
+    0,
+  );
+  const remainingSeconds =
+    eventDurationSec !== null ? eventDurationSec - totalTrackSeconds : null;
+
+  const scheduledList = useMemo(
+    () =>
+      [...scheduledEvents].sort(
+        (a, b) =>
+          new Date(a.start_time_utc).getTime() -
+          new Date(b.start_time_utc).getTime(),
+      ),
+    [scheduledEvents],
+  );
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-6 py-12 text-rose-50">
@@ -266,8 +309,8 @@ export default function UploadEventPage() {
             Add new experiences to the MixMaster VR lineup
           </h1>
           <p className="mt-3 text-base text-[#ffd6d6]">
-            Upload your mixes, preview the essential info, and publish the set so
-            partygoers inside MixMaster VR can enjoy it right on schedule.
+            Upload your mixes, preview the essentials, and publish the set on your
+            schedule. We&apos;ll keep the timing in sync.
           </p>
         </header>
 
@@ -288,9 +331,9 @@ export default function UploadEventPage() {
         <form className="space-y-8" onSubmit={submitEvent}>
           <section className="grid gap-4 md:grid-cols-2">
             <div>
-            <label className="mb-1 block text-sm font-semibold text-[#ffd6d6]">
-              Event name
-            </label>
+              <label className="mb-1 block text-sm font-semibold text-[#ffd6d6]">
+                Event name
+              </label>
               <input
                 className={fieldClasses}
                 type="text"
@@ -302,9 +345,9 @@ export default function UploadEventPage() {
               />
             </div>
             <div>
-            <label className="mb-1 block text-sm font-semibold text-[#ffd6d6]">
-              Artist / DJ name
-            </label>
+              <label className="mb-1 block text-sm font-semibold text-[#ffd6d6]">
+                Artist / DJ name
+              </label>
               <input
                 className={fieldClasses}
                 type="text"
@@ -316,9 +359,9 @@ export default function UploadEventPage() {
               />
             </div>
             <div>
-            <label className="mb-1 block text-sm font-semibold text-[#ffd6d6]">
-              Start time (Sri Lanka time)
-            </label>
+              <label className="mb-1 block text-sm font-semibold text-[#ffd6d6]">
+                Start time (Sri Lanka time)
+              </label>
               <input
                 className={fieldClasses}
                 type="datetime-local"
@@ -329,9 +372,9 @@ export default function UploadEventPage() {
               />
             </div>
             <div>
-            <label className="mb-1 block text-sm font-semibold text-[#ffd6d6]">
-              End time (Sri Lanka time)
-            </label>
+              <label className="mb-1 block text-sm font-semibold text-[#ffd6d6]">
+                End time (Sri Lanka time)
+              </label>
               <input
                 className={fieldClasses}
                 type="datetime-local"
@@ -351,13 +394,13 @@ export default function UploadEventPage() {
               type="file"
               accept=".mp3,audio/mpeg"
               multiple
-              className="block w-full cursor-pointer rounded-2xl border border-dashed border-red-700/50 bg-[#3d0c12]/70 px-4 py-6 text-center text-base font-medium text-slate-200 transition hover:border-rose-400/60 hover:text-white"
-              onChange={queueTracks}
-              disabled={isSubmitting}
+              className="block w-full cursor-pointer rounded-2xl border border-dashed border-red-700/50 bg-[#3d0c12]/70 px-4 py-6 text-center text-base font-medium text-rose-50 transition hover:border-rose-400/60 hover:text-white"
+              onChange={uploadTracksNow}
+              disabled={isSubmitting || isUploading}
             />
             <p className="mt-2 text-sm text-rose-50/80">
-              We will upload the queued files after you hit “Save event.” Feel
-              free to add multiple mixes before publishing.
+              Tracks upload immediately so we can show duration, bitrate, and size.
+              Feel free to add multiple mixes.
             </p>
           </section>
 
@@ -393,8 +436,8 @@ export default function UploadEventPage() {
               </div>
             ) : (
               <p className="mt-2 text-sm text-rose-50/80">
-                A cover image helps players identify events quickly in your
-                in-game menus.
+                A cover image helps players identify events quickly in your in-game
+                menus.
               </p>
             )}
           </section>
@@ -402,42 +445,69 @@ export default function UploadEventPage() {
           <section>
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-white">
-                {queuedTracks.length ? "Queued mixes" : "No mixes added yet"}
+                {tracks.length ? "Queued mixes" : "No mixes added yet"}
               </h2>
-              {queuedTracks.length ? (
-                <span className="text-sm text-rose-50/80">
-                  {queuedTracks.length} file
-                  {queuedTracks.length > 1 ? "s" : ""}
+              {tracks.length ? (
+                <span className="text-sm text-[#ffd6d6]">
+                  {tracks.length} file{tracks.length > 1 ? "s" : ""}
                 </span>
               ) : null}
             </div>
+            <div className="mb-4 rounded-2xl border border-[#ff9fb0]/50 bg-white/5 p-4 text-sm text-[#ffd6d6]">
+              <p className="font-semibold text-white">
+                Total playtime: {formatDuration(totalTrackSeconds)} (mm:ss)
+              </p>
+              {eventDurationSec === null ? (
+                <p className="mt-1 text-[#ffd6d6]/80">
+                  Set start and end times to see how much room is left.
+                </p>
+              ) : remainingSeconds !== null && remainingSeconds >= 0 ? (
+                <p className="mt-1 text-[#ffd6d6]/80">
+                  You can add about {formatDuration(remainingSeconds)} more before
+                  this session fills the window.
+                </p>
+              ) : (
+                <p className="mt-1 text-amber-100">
+                  You are over the window by {formatDuration(Math.abs(remainingSeconds || 0))}.
+                  The session will end when the event time is reached; later mixes
+                  may not finish.
+                </p>
+              )}
+            </div>
             <div className="space-y-3">
-              {queuedTracks.map((item) => (
+              {tracks.map((track) => (
                 <div
-                  key={item.id}
-                  className="flex items-center justify-between rounded-2xl border border-red-700/40 bg-[#3d0c12]/70 px-5 py-4"
+                  key={track.track_id}
+                  className="flex items-center justify-between rounded-2xl border border-[#ff4a4a]/40 bg-[#2b050c]/75 px-5 py-4"
                 >
                   <div>
                     <p className="text-base font-semibold text-white">
-                      {item.file.name}
+                      {track.track_name}
                     </p>
-                    <p className="text-xs text-rose-50/80">
-                      {(item.file.size / 1024).toFixed(1)} KB
+                    <p className="text-xs text-[#ffd6d6]">
+                      {formatDuration(track.track_duration_seconds)} (mm:ss){" "}
+                      {track.track_bitrate_kbps
+                        ? `• ${track.track_bitrate_kbps} kbps`
+                        : ""}{" "}
+                      {track.track_size_bytes
+                        ? `• ${(track.track_size_bytes / 1024 / 1024).toFixed(2)} MB`
+                        : ""}
                     </p>
                   </div>
                   <button
                     type="button"
-                    onClick={() => removeQueuedTrack(item.id)}
-                    className="rounded-xl border border-rose-500/40 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-rose-200 transition hover:bg-rose-500/10"
+                    onClick={() => removeTrack(track.track_id)}
+                    className="rounded-xl border border-[#ff4a4a]/60 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-[#ffd3d3] transition hover:bg-[#ff4a4a]/10"
+                    disabled={isSubmitting}
                   >
                     Remove
                   </button>
                 </div>
               ))}
-              {!queuedTracks.length ? (
-                <p className="rounded-2xl border border-dashed border-red-100/60 bg-white/5 px-4 py-6 text-sm text-rose-100/90">
-                  Drop your MP3 files here. They stay on your device until you
-                  hit <em>Save event</em>, then we send everything up for playback
+              {!tracks.length ? (
+                <p className="rounded-2xl border border-dashed border-[#ff7d7d]/50 bg-[#ff784f]/10 px-4 py-6 text-sm text-[#ffe1de]">
+                  Drop your MP3 files here. They stay on your device until you hit
+                  <em> Save event</em>, then we send everything up for playback
                   in-game.
                 </p>
               ) : null}
@@ -463,6 +533,39 @@ export default function UploadEventPage() {
           </div>
         </form>
       </div>
+
+      <section className="rounded-[24px] border border-[#ff9fb0]/50 bg-[var(--panel)] p-6 shadow-[0_0_50px_rgba(255,70,70,0.25)]">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-base font-semibold text-white">
+            Scheduled events (Sri Lanka time)
+          </h3>
+          <span className="text-xs text-[#ffd6d6]">
+            {scheduledList.length} total
+          </span>
+        </div>
+        <div className="space-y-2">
+          {scheduledList.length ? (
+            scheduledList.map((event) => (
+              <div
+                key={event.event_id}
+                className="rounded-xl border border-[#ff4a4a]/20 bg-[#2b050c]/60 px-3 py-2"
+              >
+                <p className="text-sm font-semibold text-white">
+                  {event.event_name} — {event.artist_name}
+                </p>
+                <p className="text-xs text-[#ffd6d6]">
+                  {formatSriLankaDateTime(event.start_time_utc)} –{" "}
+                  {formatSriLankaDateTime(event.end_time_utc)}
+                </p>
+              </div>
+            ))
+          ) : (
+            <p className="text-sm text-[#ffd6d6]">
+              No events scheduled yet. Create one to see it here.
+            </p>
+          )}
+        </div>
+      </section>
     </main>
   );
 }

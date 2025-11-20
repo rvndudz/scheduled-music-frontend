@@ -3,8 +3,8 @@
     "event_id": "2aa9a021-3157-4eb8-b6ce-fc976c82601a",
     "event_name": "test",
     "artist_name": "test",
-    "start_time_utc": "2025-11-20T06:00:00.000+00:00",
-    "end_time_utc": "2025-11-20T07:00:00.000+00:00",
+    "start_time_utc": "2025-11-20T06:00:00+00:00",
+    "end_time_utc": "2025-11-20T07:00:00+00:00",
     "tracks": [
       {
         "track_id": "526a3563-2d89-4cc6-abce-7985c0cad8cf",

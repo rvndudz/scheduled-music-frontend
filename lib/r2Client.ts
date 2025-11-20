@@ -1,4 +1,10 @@
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  NoSuchKey,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 
 type RequiredEnv =
   | "R2_ACCESS_KEY"
@@ -123,4 +129,50 @@ export const deleteObjectsForUrls = async (urls: string[]) => {
   }
 
   await Promise.all(keys.map((key) => deleteObjectByKey(key)));
+};
+
+export const readObjectAsText = async (
+  objectKey: string,
+): Promise<string | null> => {
+  const bucket = requireEnv("R2_BUCKET");
+  const client = getClient();
+
+  try {
+    const response = await client.send(
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: objectKey,
+      }),
+    );
+
+    const body = response.Body;
+    if (!body) {
+      return null;
+    }
+
+    const text = await body.transformToString();
+    return text;
+  } catch (error) {
+    if (error instanceof NoSuchKey) {
+      return null;
+    }
+    if ((error as { Code?: string }).Code === "NoSuchKey") {
+      return null;
+    }
+    throw error;
+  }
+};
+
+export const writeTextObject = async (objectKey: string, body: string) => {
+  const bucket = requireEnv("R2_BUCKET");
+  const client = getClient();
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: objectKey,
+      Body: body,
+      ContentType: "application/json",
+    }),
+  );
 };

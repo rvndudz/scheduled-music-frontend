@@ -4,10 +4,12 @@ import type { EventRecord } from "@/types/events";
 import {
   ensureIsoDate,
   ensureTracks,
+  findOverlappingEvent,
   persistEvents,
   readEventsFile,
   ValidationError,
 } from "@/lib/events";
+import { formatSriLankaDateTime } from "@/lib/timezone";
 import { deleteObjectsForUrls } from "@/lib/r2Client";
 
 export const runtime = "nodejs";
@@ -100,6 +102,18 @@ export async function PUT(request: Request, context: RouteParams) {
       new Date(updatedEvent.start_time_utc).getTime()
     ) {
       throw new ValidationError("end_time_utc must be after start_time_utc.");
+    }
+
+    const conflict = findOverlappingEvent(
+      events,
+      updatedEvent.start_time_utc,
+      updatedEvent.end_time_utc,
+      updatedEvent.event_id,
+    );
+    if (conflict) {
+      throw new ValidationError(
+        `Time window overlaps with "${conflict.event_name}" (${formatSriLankaDateTime(conflict.start_time_utc)} - ${formatSriLankaDateTime(conflict.end_time_utc)} SLT).`,
+      );
     }
 
     events[index] = updatedEvent;

@@ -53,6 +53,10 @@ export async function POST(request: Request) {
       typeof metadata.format.duration === "number"
         ? Math.round(metadata.format.duration)
         : null;
+    const bitrate =
+      typeof metadata.format.bitrate === "number"
+        ? Math.round(metadata.format.bitrate / 1000)
+        : null;
 
     if (!duration) {
       return NextResponse.json(
@@ -90,6 +94,8 @@ export async function POST(request: Request) {
         track_name: trackName,
         track_url: trackUrl,
         track_duration_seconds: duration,
+        ...(bitrate ? { track_bitrate_kbps: bitrate } : {}),
+        track_size_bytes: file.size,
       },
       { status: 201 },
     );
