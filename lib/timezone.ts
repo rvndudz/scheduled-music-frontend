@@ -3,7 +3,7 @@ const SRI_LANKA_TIMEZONE = "Asia/Colombo";
 
 const pad = (value: number, length = 2) => value.toString().padStart(length, "0");
 
-const formatUtcWithOffset = (date: Date) => {
+export const formatUtcWithOffset = (date: Date) => {
   const iso = date.toISOString(); // yields YYYY-MM-DDTHH:MM:SS.mmmZ
   const withoutMs = iso.replace(/\.\d{3}Z$/, "");
   return `${withoutMs}+00:00`;

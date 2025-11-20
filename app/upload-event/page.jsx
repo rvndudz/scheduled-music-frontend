@@ -2,17 +2,18 @@
 
 import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 
 import {
   convertSriLankaInputToUtc,
   formatSriLankaDateTime,
+  formatUtcWithOffset,
 } from "@/lib/timezone";
 
 const initialFormState = {
   event_name: "",
   artist_name: "",
   start_time_utc: "",
-  end_time_utc: "",
 };
 
 const fieldClasses =
@@ -23,18 +24,13 @@ const formatDuration = (totalSeconds) => {
   const hrs = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
   const secs = seconds % 60;
+  const parts = [];
   if (hrs > 0) {
-    return `${hrs}:${`${mins}`.padStart(2, "0")}:${`${secs}`.padStart(
-      2,
-      "0",
-    )}`;
+    parts.push(`${hrs} hr${hrs === 1 ? "" : "s"}`);
   }
-  return `${mins}:${`${secs}`.padStart(2, "0")}`;
-};
-
-const parseLocalDate = (value) => {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
+  parts.push(`${mins} min${mins === 1 ? "" : "s"}`);
+  parts.push(`${secs} sec${secs === 1 ? "" : "s"}`);
+  return parts.join(" ");
 };
 
 export default function UploadEventPage() {
@@ -45,7 +41,6 @@ export default function UploadEventPage() {
   const [scheduledEvents, setScheduledEvents] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [status, setStatus] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -75,19 +70,16 @@ export default function UploadEventPage() {
     setFormValues((prev) => ({ ...prev, [name]: value }));
   };
 
-  const resetForm = () => {
-    setFormValues(initialFormState);
-    setTracks([]);
-    if (coverPreview) {
-      URL.revokeObjectURL(coverPreview);
-    }
-    setCoverImage(null);
-    setCoverPreview(null);
-    setStatus({
-      type: "info",
-      text: "Form cleared. No mixes are queued anymore.",
-    });
-  };
+const resetForm = () => {
+  setFormValues(initialFormState);
+  setTracks([]);
+  if (coverPreview) {
+    URL.revokeObjectURL(coverPreview);
+  }
+  setCoverImage(null);
+  setCoverPreview(null);
+  toast("Form cleared. No mixes are queued anymore.", { icon: "🧹" });
+};
 
   const handleCoverChange = (event) => {
     const file = event.target.files?.[0];
@@ -99,10 +91,7 @@ export default function UploadEventPage() {
     }
     setCoverImage(file);
     setCoverPreview(URL.createObjectURL(file));
-    setStatus({
-      type: "success",
-      text: "Cover image queued for upload.",
-    });
+    toast.success("Cover image queued for upload.");
   };
 
   const removeCover = () => {
@@ -118,7 +107,6 @@ export default function UploadEventPage() {
     if (!fileList || !fileList.length) return;
 
     setIsUploading(true);
-    setStatus(null);
 
     const uploaded = [];
     for (const file of Array.from(fileList)) {
@@ -136,21 +124,18 @@ export default function UploadEventPage() {
         uploaded.push(data);
         setTracks((prev) => [...prev, data]);
       } catch (err) {
-        setStatus({
-          type: "error",
-          text:
-            err instanceof Error
-              ? err.message
-              : "Track upload failed unexpectedly.",
-        });
+        toast.error(
+          err instanceof Error
+            ? err.message
+            : "Track upload failed unexpectedly.",
+        );
       }
     }
 
     if (uploaded.length) {
-      setStatus({
-        type: "success",
-        text: `Added ${uploaded.length} track${uploaded.length > 1 ? "s" : ""}.`,
-      });
+      toast.success(
+        `Added ${uploaded.length} track${uploaded.length > 1 ? "s" : ""}.`,
+      );
     }
 
     setIsUploading(false);
@@ -163,13 +148,9 @@ export default function UploadEventPage() {
 
   const submitEvent = async (event) => {
     event.preventDefault();
-    setStatus(null);
 
     if (!tracks.length) {
-      setStatus({
-        type: "error",
-        text: "Please add at least one MP3 before publishing.",
-      });
+      toast.error("Please add at least one MP3 before publishing.");
       return;
     }
 
@@ -180,36 +161,28 @@ export default function UploadEventPage() {
           formValues.start_time_utc,
           "Start time",
         ),
-        end: convertSriLankaInputToUtc(formValues.end_time_utc, "End time"),
+        end: null,
       };
     } catch (error) {
-      setStatus({
-        type: "error",
-        text: error instanceof Error ? error.message : "Invalid event data.",
-      });
+      toast.error(error instanceof Error ? error.message : "Invalid event data.");
       return;
     }
 
     if (!formValues.event_name.trim() || !formValues.artist_name.trim()) {
-      setStatus({
-        type: "error",
-        text: "Event and artist names cannot be empty.",
-      });
-      return;
-    }
-
-    if (
-      new Date(normalizedTimes.end).getTime() <=
-      new Date(normalizedTimes.start).getTime()
-    ) {
-      setStatus({
-        type: "error",
-        text: "End time must be after start time.",
-      });
+      toast.error("Event and artist names cannot be empty.");
       return;
     }
 
     setIsSubmitting(true);
+
+    const startUtc = normalizedTimes.start;
+    const totalSeconds = tracks.reduce(
+      (sum, track) => sum + (track.track_duration_seconds || 0),
+      0,
+    );
+    const endUtc = formatUtcWithOffset(
+      new Date(new Date(startUtc).getTime() + totalSeconds * 1000),
+    );
 
     let coverImageUrl;
     if (coverImage) {
@@ -227,13 +200,11 @@ export default function UploadEventPage() {
         coverImageUrl = data.cover_image_url;
       } catch (error) {
         setIsSubmitting(false);
-        setStatus({
-          type: "error",
-          text:
-            error instanceof Error
-              ? error.message
-              : "Failed to upload cover image.",
-        });
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to upload cover image.",
+        );
         return;
       }
     }
@@ -245,8 +216,8 @@ export default function UploadEventPage() {
         body: JSON.stringify({
           event_name: formValues.event_name.trim(),
           artist_name: formValues.artist_name.trim(),
-          start_time_utc: normalizedTimes.start,
-          end_time_utc: normalizedTimes.end,
+          start_time_utc: startUtc,
+          end_time_utc: endUtc,
           tracks,
           ...(coverImageUrl ? { cover_image_url: coverImageUrl } : {}),
         }),
@@ -258,35 +229,23 @@ export default function UploadEventPage() {
         throw new Error(data?.error ?? "Failed to create event.");
       }
 
-      setStatus({
-        type: "success",
-        text: `"${data.event.event_name}" is now scheduled inside MixMaster VR.`,
-      });
+      toast.success(
+        `"${data.event.event_name}" is now scheduled inside MixMaster VR.`,
+      );
       setFormValues(initialFormState);
       setTracks([]);
       removeCover();
     } catch (error) {
-      setStatus({
-        type: "error",
-        text: error instanceof Error ? error.message : "Unexpected error.",
-      });
+      toast.error(error instanceof Error ? error.message : "Unexpected error.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const eventStart = parseLocalDate(formValues.start_time_utc);
-  const eventEnd = parseLocalDate(formValues.end_time_utc);
-  const eventDurationSec =
-    eventStart && eventEnd && eventEnd > eventStart
-      ? Math.floor((eventEnd.getTime() - eventStart.getTime()) / 1000)
-      : null;
   const totalTrackSeconds = tracks.reduce(
     (sum, track) => sum + (track.track_duration_seconds || 0),
     0,
   );
-  const remainingSeconds =
-    eventDurationSec !== null ? eventDurationSec - totalTrackSeconds : null;
 
   const scheduledList = useMemo(
     () =>
@@ -371,19 +330,6 @@ export default function UploadEventPage() {
                 required
               />
             </div>
-            <div>
-              <label className="mb-1 block text-sm font-semibold text-[#ffd6d6]">
-                End time (Sri Lanka time)
-              </label>
-              <input
-                className={fieldClasses}
-                type="datetime-local"
-                name="end_time_utc"
-                value={formValues.end_time_utc}
-                onChange={handleInputChange}
-                required
-              />
-            </div>
           </section>
 
           <section>
@@ -455,24 +401,11 @@ export default function UploadEventPage() {
             </div>
             <div className="mb-4 rounded-2xl border border-[#ff9fb0]/50 bg-white/5 p-4 text-sm text-[#ffd6d6]">
               <p className="font-semibold text-white">
-                Total playtime: {formatDuration(totalTrackSeconds)} (mm:ss)
+                Total playtime: {formatDuration(totalTrackSeconds)}
               </p>
-              {eventDurationSec === null ? (
-                <p className="mt-1 text-[#ffd6d6]/80">
-                  Set start and end times to see how much room is left.
-                </p>
-              ) : remainingSeconds !== null && remainingSeconds >= 0 ? (
-                <p className="mt-1 text-[#ffd6d6]/80">
-                  You can add about {formatDuration(remainingSeconds)} more before
-                  this session fills the window.
-                </p>
-              ) : (
-                <p className="mt-1 text-amber-100">
-                  You are over the window by {formatDuration(Math.abs(remainingSeconds || 0))}.
-                  The session will end when the event time is reached; later mixes
-                  may not finish.
-                </p>
-              )}
+              <p className="mt-1 text-[#ffd6d6]/80">
+                Event length will be start time + total track duration.
+              </p>
             </div>
             <div className="space-y-3">
               {tracks.map((track) => (
@@ -485,7 +418,7 @@ export default function UploadEventPage() {
                       {track.track_name}
                     </p>
                     <p className="text-xs text-[#ffd6d6]">
-                      {formatDuration(track.track_duration_seconds)} (mm:ss){" "}
+                      {formatDuration(track.track_duration_seconds)}{" "}
                       {track.track_bitrate_kbps
                         ? `• ${track.track_bitrate_kbps} kbps`
                         : ""}{" "}
@@ -544,26 +477,26 @@ export default function UploadEventPage() {
           </span>
         </div>
         <div className="space-y-2">
-          {scheduledList.length ? (
-            scheduledList.map((event) => (
-              <div
-                key={event.event_id}
-                className="rounded-xl border border-[#ff4a4a]/20 bg-[#2b050c]/60 px-3 py-2"
-              >
-                <p className="text-sm font-semibold text-white">
-                  {event.event_name} — {event.artist_name}
+              {scheduledList.length ? (
+                scheduledList.map((event) => (
+                  <div
+                    key={event.event_id}
+                    className="rounded-xl border border-[#ff4a4a]/20 bg-[#2b050c]/60 px-3 py-2"
+                  >
+                    <p className="text-sm font-semibold text-white">
+                      {event.event_name} — {event.artist_name}
+                    </p>
+                    <p className="text-xs text-[#ffd6d6]">
+                      {formatSriLankaDateTime(event.start_time_utc)} –{" "}
+                      {formatSriLankaDateTime(event.end_time_utc)}
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-[#ffd6d6]">
+                  No events scheduled yet. Create one to see it here.
                 </p>
-                <p className="text-xs text-[#ffd6d6]">
-                  {formatSriLankaDateTime(event.start_time_utc)} –{" "}
-                  {formatSriLankaDateTime(event.end_time_utc)}
-                </p>
-              </div>
-            ))
-          ) : (
-            <p className="text-sm text-[#ffd6d6]">
-              No events scheduled yet. Create one to see it here.
-            </p>
-          )}
+              )}
         </div>
       </section>
     </main>

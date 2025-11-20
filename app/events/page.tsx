@@ -13,6 +13,7 @@ import type { EventRecord } from "@/types/events";
 import {
   convertSriLankaInputToUtc,
   formatSriLankaDateTime,
+  formatUtcWithOffset,
   toSriLankaInputValue,
 } from "@/lib/timezone";
 
@@ -20,7 +21,6 @@ type FormState = {
   event_name: string;
   artist_name: string;
   start_time_utc: string;
-  end_time_utc: string;
 };
 
 type StatusMessage = {
@@ -32,7 +32,6 @@ const initialFormState: FormState = {
   event_name: "",
   artist_name: "",
   start_time_utc: "",
-  end_time_utc: "",
 };
 
 const fieldClasses =
@@ -50,6 +49,9 @@ const ManageEventsPage = () => {
   const [status, setStatus] = useState<StatusMessage | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<FormState>(initialFormState);
+  const [formTracks, setFormTracks] = useState<EventRecord["tracks"]>([]);
+  const [coverPreview, setCoverPreview] = useState<string | null>(null);
+  const [coverFile, setCoverFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const fetchEvents = useCallback(async () => {
@@ -91,22 +93,69 @@ const ManageEventsPage = () => {
       event_name: event.event_name,
       artist_name: event.artist_name,
       start_time_utc: toSriLankaInputValue(event.start_time_utc),
-      end_time_utc: toSriLankaInputValue(event.end_time_utc),
     });
+    setFormTracks(event.tracks);
+    setCoverPreview(event.cover_image_url ?? null);
+    setCoverFile(null);
     setStatus({
       type: "info",
       text: `Editing "${event.event_name}"`,
     });
   };
 
-  const cancelEditing = () => {
-    setEditingId(null);
-    setFormValues(initialFormState);
-  };
+const cancelEditing = () => {
+  setEditingId(null);
+  setFormValues(initialFormState);
+  setFormTracks([]);
+  setCoverPreview(null);
+  setCoverFile(null);
+};
 
   const handleFormChange = (event: ChangeEvent<HTMLInputElement>) => {
     const { name, value } = event.target;
     setFormValues((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const uploadTracksNow = async (event: ChangeEvent<HTMLInputElement>) => {
+    const fileList = event.target.files;
+    if (!fileList || !fileList.length) {
+      return;
+    }
+    setStatus(null);
+    for (const file of Array.from(fileList)) {
+      const formData = new FormData();
+      formData.append("file", file);
+      try {
+        const response = await fetch("/api/upload-track", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error ?? "Unable to upload track.");
+        }
+        setFormTracks((prev) => [...prev, data]);
+      } catch (error) {
+        setStatus({
+          type: "error",
+          text:
+            error instanceof Error
+              ? error.message
+              : "Failed to upload one of the tracks.",
+        });
+      }
+    }
+    event.target.value = "";
+  };
+
+  const removeTrackFromForm = (trackId: string) => {
+    setFormTracks((prev) => prev.filter((track) => track.track_id !== trackId));
+  };
+
+  const handleCoverChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    setCoverFile(file);
+    setCoverPreview(file ? URL.createObjectURL(file) : null);
   };
 
   const handleUpdateEvent = async (event: FormEvent<HTMLFormElement>) => {
@@ -119,22 +168,50 @@ const ManageEventsPage = () => {
     setStatus(null);
 
     try {
+      if (!formTracks.length) {
+        throw new Error("Please ensure at least one track is attached.");
+      }
+
+      const startUtc = convertSriLankaInputToUtc(
+        formValues.start_time_utc,
+        "Start time",
+      );
+
+      if (!formValues.event_name.trim() || !formValues.artist_name.trim()) {
+        throw new Error("Event and artist names cannot be empty.");
+      }
+
+      const totalSeconds = formTracks.reduce(
+        (sum, track) => sum + (track.track_duration_seconds || 0),
+        0,
+      );
+      const endUtc = formatUtcWithOffset(
+        new Date(new Date(startUtc).getTime() + totalSeconds * 1000),
+      );
+
+      let coverUrl = coverPreview ?? undefined;
+      if (coverFile) {
+        const formData = new FormData();
+        formData.append("file", coverFile);
+        const res = await fetch("/api/upload-cover", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error ?? "Unable to upload cover image.");
+        }
+        coverUrl = data.cover_image_url;
+      }
+
       const payload = {
         event_name: formValues.event_name.trim(),
         artist_name: formValues.artist_name.trim(),
-        start_time_utc: convertSriLankaInputToUtc(
-          formValues.start_time_utc,
-          "Start time",
-        ),
-        end_time_utc: convertSriLankaInputToUtc(
-          formValues.end_time_utc,
-          "End time",
-        ),
+        start_time_utc: startUtc,
+        end_time_utc: endUtc,
+        tracks: formTracks,
+        ...(coverUrl ? { cover_image_url: coverUrl } : {}),
       };
-
-      if (!payload.event_name || !payload.artist_name) {
-        throw new Error("Event and artist names cannot be empty.");
-      }
 
       const response = await fetch(`/api/events/${editingId}`, {
         method: "PUT",
@@ -480,8 +557,8 @@ const ManageEventsPage = () => {
             {editingId ? "Edit event" : "Select an event to edit"}
           </h2>
           <p className="mt-2 text-sm text-rose-50/80">
-            Pick a set from the left to tweak its details. Enter times in Sri
-            Lanka time—the schedule will keep everything in sync for MixMaster VR.
+            Pick a set from the left to tweak its details. Enter start time in Sri
+            Lanka time—the end time is auto-calculated from track duration.
           </p>
 
           {editingId ? (
@@ -525,18 +602,103 @@ const ManageEventsPage = () => {
                   required
                 />
               </div>
+              <div className="rounded-2xl border border-[#ff9fb0]/50 bg-white/5 p-4 text-sm text-[#ffd6d6]">
+                <p className="font-semibold text-white">
+                  Total playtime:{" "}
+                  {formatDuration(
+                    formTracks.reduce(
+                      (sum, t) => sum + (t.track_duration_seconds || 0),
+                      0,
+                    ),
+                  )}
+                </p>
+                <p className="mt-1 text-[#ffd6d6]/80">
+                  Event end time will be start time + total track duration.
+                </p>
+              </div>
+
               <div>
                 <label className="mb-1 block text-sm font-semibold text-slate-300">
-                  End time (Sri Lanka time)
+                  Replace or upload cover image
                 </label>
                 <input
-                  className={fieldClasses}
-                  type="datetime-local"
-                  name="end_time_utc"
-                  value={formValues.end_time_utc}
-                  onChange={handleFormChange}
-                  required
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="block w-full cursor-pointer rounded-2xl border border-dashed border-red-700/50 bg-[#3d0c12]/70 px-4 py-5 text-center text-base font-medium text-slate-200 transition hover:border-rose-400/60 hover:text-white"
+                  onChange={handleCoverChange}
+                  disabled={isSubmitting}
                 />
+                {coverPreview ? (
+                  <div className="mt-3 flex items-center gap-3">
+                    <Image
+                      src={coverPreview}
+                      alt="Cover preview"
+                      width={64}
+                      height={64}
+                      unoptimized
+                      className="h-16 w-16 rounded-xl border border-[#ff9a6b]/60 object-cover"
+                    />
+                    <p className="text-xs text-[#ffd6d6]">New cover will replace the existing one on save.</p>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-xs text-[#ffd6d6]/80">
+                    If left empty, the current cover remains.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-semibold text-slate-300">
+                  Upload or replace tracks (uploads immediately)
+                </label>
+                <input
+                  type="file"
+                  accept=".mp3,audio/mpeg"
+                  multiple
+                  className="block w-full cursor-pointer rounded-2xl border border-dashed border-red-700/50 bg-[#3d0c12]/70 px-4 py-5 text-center text-base font-medium text-slate-200 transition hover:border-rose-400/60 hover:text-white"
+                  onChange={uploadTracksNow}
+                  disabled={isSubmitting}
+                />
+                <div className="mt-3 space-y-3">
+                  {formTracks.map((track) => (
+                    <div
+                      key={track.track_id}
+                      className="rounded-2xl border border-[#ff4a4a]/30 bg-[#2b050c]/70 p-3"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-semibold text-white">
+                            {track.track_name}
+                          </p>
+                          <p className="text-xs text-[#ffd6d6]">
+                            {[
+                              formatDuration(track.track_duration_seconds || 0),
+                              track.track_bitrate_kbps
+                                ? `${track.track_bitrate_kbps} kbps`
+                                : null,
+                              (track.track_size_bytes ?? 0) > 0
+                                ? `${(track.track_size_bytes / 1024 / 1024).toFixed(2)} MB`
+                                : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" • ")}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="rounded-xl border border-rose-500/50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-100 transition hover:bg-rose-500/10"
+                          onClick={() => removeTrackFromForm(track.track_id)}
+                          disabled={isSubmitting}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {!formTracks.length ? (
+                    <p className="text-xs text-[#ffd6d6]/80">Upload at least one track to save changes.</p>
+                  ) : null}
+                </div>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row">
                 <button
