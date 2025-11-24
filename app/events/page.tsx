@@ -54,7 +54,8 @@ const ManageEventsPage = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [status, setStatus] = useState<StatusMessage | null>(null);
   const [userCounts, setUserCounts] = useState<Record<string, number>>({});
-  const [isCountsLoading, setIsCountsLoading] = useState(false);
+  const [isCountsLoadingAll, setIsCountsLoadingAll] = useState(false);
+  const [countLoadingId, setCountLoadingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<FormState>(initialFormState);
   const [formTracks, setFormTracks] = useState<EventRecord["tracks"]>([]);
@@ -72,6 +73,7 @@ const ManageEventsPage = () => {
         throw new Error(payload?.error ?? "Unable to load events.");
       }
       setEvents(payload.events ?? []);
+      setUserCounts({});
       if ((payload.events ?? []).length === 0) {
         setStatus({
           type: "info",
@@ -95,17 +97,26 @@ const ManageEventsPage = () => {
     fetchEvents();
   }, [fetchEvents]);
 
-  useEffect(() => {
-    let active = true;
-    const loadCounts = async () => {
+  const fetchUserCounts = useCallback(
+    async (eventId?: string) => {
       if (!events.length) {
-        if (active) setUserCounts({});
+        setUserCounts({});
         return;
       }
-      if (active) setIsCountsLoading(true);
+
+      if (eventId) {
+        setCountLoadingId(eventId);
+      } else {
+        setIsCountsLoadingAll(true);
+      }
+
+      const targets = eventId
+        ? events.filter((event) => event.event_id === eventId)
+        : events;
+
       try {
         const results = await Promise.all(
-          events.map(async (event) => {
+          targets.map(async (event) => {
             try {
               const res = await fetch(
                 `https://event-user-count.rvndudz77.workers.dev/events/${event.event_id}/counts`,
@@ -127,8 +138,7 @@ const ManageEventsPage = () => {
             }
           }),
         );
-        if (!active) return;
-        const next: Record<string, number> = {};
+        const next: Record<string, number> = eventId ? { ...userCounts } : {};
         results.forEach(([id, count]) => {
           if (typeof count === "number" && count >= 0) {
             next[id] = count;
@@ -136,16 +146,25 @@ const ManageEventsPage = () => {
         });
         setUserCounts(next);
       } finally {
-        if (active) setIsCountsLoading(false);
+        if (eventId) {
+          setCountLoadingId(null);
+        } else {
+          setIsCountsLoadingAll(false);
+        }
       }
-    };
-    loadCounts();
-    const interval = setInterval(loadCounts, 15000);
-    return () => {
-      active = false;
-      clearInterval(interval);
-    };
-  }, [events]);
+    },
+    [events, userCounts],
+  );
+
+  useEffect(() => {
+    if (
+      events.length > 0 &&
+      Object.keys(userCounts).length === 0 &&
+      !isCountsLoadingAll
+    ) {
+      void fetchUserCounts();
+    }
+  }, [events, userCounts, isCountsLoadingAll, fetchUserCounts]);
 
   const startEditing = (event: EventRecord) => {
     setEditingId(event.event_id);
@@ -556,6 +575,17 @@ const cancelEditing = () => {
             Refresh list
           </button>
           <button
+            className="rounded-2xl border border-emerald-500/50 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-70"
+            onClick={fetchUserCounts}
+            disabled={isLoading || isCountsLoadingAll || events.length === 0}
+            title="Refresh listener counts"
+          >
+            <span className="mr-2 inline-block" aria-hidden>
+              ↻
+            </span>
+            {isCountsLoadingAll ? "Loading counts..." : "Refresh counts"}
+          </button>
+          <button
             className="rounded-2xl border border-orange-500/40 bg-orange-500/10 px-4 py-2 text-sm font-semibold text-orange-200 transition hover:bg-orange-500/20 disabled:cursor-not-allowed disabled:opacity-70"
             onClick={deleteExpiredEvents}
             disabled={isLoading}
@@ -578,7 +608,8 @@ const cancelEditing = () => {
             <h2 className="text-xl font-semibold text-white">
               Event queue
             </h2>
-            <span className="text-sm text-rose-50/80">
+            <span className="flex items-center gap-2 text-sm text-rose-50/80">
+              <span aria-hidden>🗓️</span>
               {isLoading
                 ? "Loading..."
                 : `${events.length} event${events.length === 1 ? "" : "s"}`}
@@ -623,13 +654,26 @@ const cancelEditing = () => {
                       <p className="text-sm text-rose-50/80">
                         {eventRecord.artist_name}
                       </p>
-                      <p className="text-xs text-emerald-200/90">
-                        User Count:{" "}
+                      <p className="flex items-center gap-2 text-xs text-emerald-200/90">
+                        <button
+                          type="button"
+                          className="rounded-full border border-emerald-400/60 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-100 transition hover:bg-emerald-500/20 disabled:opacity-60"
+                          onClick={fetchUserCounts}
+                          disabled={
+                            isCountsLoadingAll ||
+                            countLoadingId === eventRecord.event_id
+                          }
+                          title="Refresh listener count"
+                        >
+                          ↻
+                        </button>
+                        User count:{" "}
                         {userCounts[eventRecord.event_id] !== undefined
                           ? userCounts[eventRecord.event_id]
-                          : isCountsLoading
+                          : isCountsLoadingAll ||
+                              countLoadingId === eventRecord.event_id
                             ? "Loading..."
-                            : "—"}
+                            : "-"}
                       </p>
                       {isDefaultEvent(eventRecord) ? (
                         <p className="text-xs font-semibold uppercase tracking-wide text-amber-200">
